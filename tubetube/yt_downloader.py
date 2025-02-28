@@ -8,14 +8,24 @@ import random
 import yt_dlp
 from settings import DownloadCancelledException
 import helpers
+from persistence import DataPersistence
 
 
 class DownloadManager:
-    def __init__(self):
+    def __init__(self, config_folder: str):
         self.download_queue = queue.Queue()
         self.all_items = {}
         self.lock = threading.Lock()
         self.stop_signals = {}
+        
+        # Initialize data persistence
+        self.persistence = DataPersistence(config_folder)
+        
+        # Load saved download items
+        saved_items = self.persistence.load_downloads()
+        if saved_items:
+            self.all_items = saved_items
+            logging.info(f"Loaded {len(saved_items)} saved download items")
 
         os_system = platform.system()
         logging.info(f"OS: {os_system}")
@@ -124,7 +134,7 @@ class DownloadManager:
 
         except Exception as e:
             logging.error(f"Error extracting info: {e}")
-            logging.error(f"Nothing Added to Queue")
+            logging.error("Nothing Added to Queue")
             self.socketio.emit("toast", {"title": "Failed to add item to the queue.", "body": f"Please check the URL.\n\n {str(e)}"})
             return
 
@@ -156,6 +166,9 @@ class DownloadManager:
             with self.lock:
                 self.all_items[download_id] = item
                 self.stop_signals[download_id] = threading.Event()
+                # For new items, we need to save the full item to the database
+                # This is one of the few cases where we need to save the entire item
+                self.persistence.save_downloads(self.all_items)
             self.download_queue.put(download_id)
             logging.info(f'Queued item: {item["title"]} with ID: {download_id}')
             self.socketio.emit("update_download_list", self.all_items)
@@ -175,6 +188,8 @@ class DownloadManager:
 
                 if self.all_items[download_id]["skipped"]:
                     self.all_items[download_id]["status"] = "Cancelled"
+                    # Update status in database
+                    self.persistence.update_item(download_id, status="Cancelled")
                     logging.info(f"Item {download_id} marked as skipped.")
                     self.socketio.emit("update_download_item", {"item": self.all_items[download_id]})
 
@@ -187,11 +202,12 @@ class DownloadManager:
             finally:
                 self.download_queue.task_done()
                 if self.download_queue.empty():
-                    logging.info(f"Queue is empty.")
+                    logging.info("Queue is empty. ")
 
     def _download_item(self, download_id):
         item = self.all_items[download_id]
         item["status"] = "In Progress"
+        self.persistence.update_item(download_id, status="In Progress")
         self.socketio.emit("update_download_item", {"item": item})
 
         download_settings = item.get("download_settings")
@@ -296,8 +312,15 @@ class DownloadManager:
                     speed_str = re.sub(r"\x1b\[[0-9;]*m", "", d.get("_speed_str", "")).strip()
                     progress_message = f"{percent_str} at {speed_str}"
 
+                # Update progress in memory
                 item["progress"] = progress_message
-                item["status"] = "Downloading"
+                
+                # Only update status in database if it has changed
+                if item["status"] != "Downloading":
+                    item["status"] = "Downloading"
+                    self.persistence.update_item(download_id, status="Downloading")
+                
+                # Don't save progress updates to database, only update in memory
                 self.socketio.emit("update_download_item", {"item": item})
 
         elif d["status"] == "finished":
@@ -305,6 +328,8 @@ class DownloadManager:
                 item = self.all_items[download_id]
                 item["progress"] = "Downloaded"
                 item["status"] = "Processing"
+                # Update status in database when it changes
+                self.persistence.update_item(download_id, status="Processing")
                 logging.info(f'Download finished: {item.get("title")} - processing now')
                 self.socketio.emit("update_download_item", {"item": item})
 
@@ -314,6 +339,8 @@ class DownloadManager:
                 if item_id in self.all_items:
                     self.all_items[item_id]["skipped"] = True
                     self.all_items[item_id]["status"] = "Cancelling"
+                    # Update in database
+                    self.persistence.update_item(item_id, status="Cancelling")
                     logging.info(f"Item {item_id} marked for cancellation.")
                     if item_id in self.stop_signals:
                         self.stop_signals[item_id].set()
@@ -326,7 +353,66 @@ class DownloadManager:
                     logging.info(f"Removing item {item_id}")
                     if item_id in self.stop_signals:
                         self.stop_signals[item_id].set()
+                    # Delete from database
+                    self.persistence.delete_item(item_id)
                     del self.all_items[item_id]
                     if item_id in self.stop_signals:
                         del self.stop_signals[item_id]
                     self.socketio.emit("remove_download_item", {"id": item_id})
+
+    def retry_download(self, item_ids):
+        """Retry downloading items that have failed, completed, or been cancelled"""
+        with self.lock:
+            for item_id in item_ids:
+                if item_id in self.all_items:
+                    item = self.all_items[item_id]
+                    current_status = item["status"]
+                    
+                    # Only retry if the item is not already in progress or pending
+                    if current_status not in ["In Progress", "Downloading", "Pending"]:
+                        logging.info(f"Retrying download for item {item_id}: {item['title']}")
+                        
+                        # Reset the item's status and progress
+                        item["status"] = "Pending"
+                        item["progress"] = "0%"
+                        item["skipped"] = False
+                        
+                        # Update in database
+                        self.persistence.update_item(item_id, status="Pending")
+                        
+                        # Create a new stop signal if needed
+                        if item_id not in self.stop_signals:
+                            self.stop_signals[item_id] = threading.Event()
+                        
+                        # Add back to the download queue
+                        self.download_queue.put(item_id)
+                        
+                        # Notify the client
+                        self.socketio.emit("update_download_item", {"item": item})
+                        self.socketio.emit("toast", {"title": "Download Retrying", "body": f"Retrying download for '{item['title']}'"})
+                    else:
+                        logging.info(f"Item {item_id} is already {current_status}, cannot retry")
+                        self.socketio.emit("toast", {"title": "Cannot Retry", "body": f"Item '{item['title']}' is already {current_status}"})
+
+    def shutdown(self):
+        """Properly shutdown the download manager and stop all background threads"""
+        logging.info("Shutting down DownloadManager...")
+        
+        # Stop all active downloads
+        with self.lock:
+            for item_id in list(self.stop_signals.keys()):
+                self.stop_signals[item_id].set()
+                logging.info(f"Signaled stop for download {item_id}")
+        
+        # Save final state
+        if self.all_items:
+            with self.lock:
+                self.persistence.save_downloads(self.all_items)
+                logging.info("Saved final download state")
+        
+        # Close database connection
+        if self.persistence:
+            self.persistence.close()
+            logging.info("Closed database connection")
+        
+        logging.info("DownloadManager shutdown complete")

@@ -12,7 +12,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 class WebApp(Settings, DownloadManager):
     def __init__(self):
         Settings.__init__(self)
-        DownloadManager.__init__(self)
+        DownloadManager.__init__(self, config_folder=self.config_folder)
         self.app = Flask(__name__)
         self.app.secret_key = Config.SECRET_KEY
         self.socketio = SocketIO(self.app, cors_allowed_origins=Config.SOCKETIO_CORS_ALLOWED_ORIGINS)
@@ -37,6 +37,10 @@ class WebApp(Settings, DownloadManager):
         def handle_cancel_items(item_ids):
             threading.Thread(target=self.cancel_items, args=(item_ids,), daemon=True).start()
 
+        @self.socketio.on("retry_items")
+        def handle_retry_items(item_ids):
+            threading.Thread(target=self.retry_download, args=(item_ids,), daemon=True).start()
+
     def client_connect(self):
         self.socketio.emit(
             "update_folder_locations",
@@ -47,7 +51,7 @@ class WebApp(Settings, DownloadManager):
     def download_stuff(self, item_info):
         folder_name = item_info.get("folder_name")
         if folder_name not in self.folder_locations:
-            logging.warning(f"Invalid folder selected")
+            logging.warning(f"Invalid folder selected: {folder_name}")
             return
 
         download_settings = self.folder_locations.get(folder_name, {})
@@ -55,9 +59,21 @@ class WebApp(Settings, DownloadManager):
         self.add_to_queue(item_info)
 
     def run_app(self):
-        self.socketio.run(self.app, host="0.0.0.0", port=5000)
+        try:
+            self.socketio.run(self.app, host="0.0.0.0", port=5000)
+        except KeyboardInterrupt:
+            logging.info("Application shutdown requested...")
+        finally:
+            # Ensure proper shutdown of the DownloadManager
+            self.shutdown()
+            logging.info("Application shutdown complete")
 
     def get_app(self):
+        # Register shutdown handlers for WSGI servers
+        @self.app.teardown_appcontext
+        def shutdown_session(exception=None):
+            self.shutdown()
+            logging.info("Application context torn down")
         return self.app
 
 

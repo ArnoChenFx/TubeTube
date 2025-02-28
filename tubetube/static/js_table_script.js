@@ -3,6 +3,7 @@ const template = document.getElementById('row-template');
 const selectAll = document.getElementById('select-all');
 const removeSelected = document.getElementById('remove-selected');
 const removeCompleted = document.getElementById('remove-completed');
+const retrySelected = document.getElementById('retry-selected');
 let lastChecked = null;
 
 function updateSelectAllState() {
@@ -107,6 +108,20 @@ removeCompleted.addEventListener('click', function () {
 
     if (completedIds.length > 0) {
         socket.emit('remove_items', completedIds);
+    }
+});
+
+retrySelected.addEventListener('click', function () {
+    const retryIds = [];
+
+    document.querySelectorAll('.row-select:checked').forEach(checkbox => {
+        const row = checkbox.closest('tr');
+        const id = parseInt(row.getAttribute('data-id'), 10);
+        retryIds.push(id);
+    });
+
+    if (retryIds.length > 0) {
+        socket.emit('retry_items', retryIds);
     }
 });
 
