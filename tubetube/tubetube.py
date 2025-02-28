@@ -63,17 +63,19 @@ class WebApp(Settings, DownloadManager):
             self.socketio.run(self.app, host="0.0.0.0", port=5000)
         except KeyboardInterrupt:
             logging.info("Application shutdown requested...")
+        except Exception as e:
+            logging.error(f"Application shutdown due to error: {e}")
         finally:
             # Ensure proper shutdown of the DownloadManager
             self.shutdown()
             logging.info("Application shutdown complete")
 
     def get_app(self):
-        # Register shutdown handlers for WSGI servers
-        @self.app.teardown_appcontext
-        def shutdown_session(exception=None):
-            self.shutdown()
-            logging.info("Application context torn down")
+        # # Register shutdown handlers for WSGI servers
+        # @self.app.teardown_appcontext
+        # def shutdown_session(exception=None):
+        #     self.shutdown()
+        #     logging.info("Application context torn down")
         return self.app
 
 
