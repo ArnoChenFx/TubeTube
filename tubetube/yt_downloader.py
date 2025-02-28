@@ -426,11 +426,11 @@ class DownloadManager:
         """Properly shutdown the download manager and stop all background threads"""
         logging.info("Shutting down DownloadManager...")
         
-        # Stop all active downloads
-        with self.lock:
-            for item_id in list(self.stop_signals.keys()):
-                self.stop_signals[item_id].set()
-                logging.info(f"Signaled stop for download {item_id}")
+        # # Stop all active downloads
+        # with self.lock:
+        #     for item_id in list(self.stop_signals.keys()):
+        #         self.stop_signals[item_id].set()
+        #         logging.info(f"Signaled stop for download {item_id}")
         
         # Save final state
         if self.all_items:
