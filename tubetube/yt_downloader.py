@@ -149,7 +149,7 @@ class DownloadManager:
         if "entries" in yt_info_dict:
             playlist_name = re.sub(r'[<>:"/\\|?*]', "-", yt_info_dict.get("title"))
             item_info["folder_name"] = f'{item_info.get("folder_name")}/{playlist_name}'
-            logging.info(f"Adding playlist: {playlist_name} to queue")
+            logging.info(f"Adding playlist: {playlist_name} {yt_info_dict["entries"]} to queue")
             for entry in yt_info_dict["entries"]:
                 self._enqueue_item(entry, item_info)
         else:
@@ -433,7 +433,7 @@ class DownloadManager:
         #         logging.info(f"Signaled stop for download {item_id}")
         
         # Save final state
-        if self.all_items:
+        if self.all_items and self.persistence:
             with self.lock:
                 self.persistence.save_downloads(self.all_items)
                 logging.info("Saved final download state")
@@ -441,6 +441,7 @@ class DownloadManager:
         # Close database connection
         if self.persistence:
             self.persistence.close()
+            self.persistence = None
             logging.info("Closed database connection")
         
         logging.info("DownloadManager shutdown complete")
