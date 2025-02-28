@@ -24,6 +24,14 @@ class DownloadManager:
         # Load saved download items
         saved_items = self.persistence.load_downloads()
         if saved_items:
+            # Mark all unfinished downloads as failed
+            for item_id, item in saved_items.items():
+                status = item.get("status")
+                if status in ("In Progress", "Downloading", "Pending"):
+                    logging.info(f"Marking unfinished download {item_id}: '{item.get('title')}' as Failed")
+                    item["status"] = "Failed"
+                    self.persistence.update_item(item_id, status="Failed")
+            
             self.all_items = saved_items
             logging.info(f"Loaded {len(saved_items)} saved download items")
 
@@ -368,8 +376,28 @@ class DownloadManager:
                     item = self.all_items[item_id]
                     current_status = item["status"]
                     
+                    # Check if file exists for completed downloads
+                    file_exists = True
+                    if current_status == "Complete":
+                        folder_name = item.get("folder_name")
+                        item_title = re.sub(r'[<>:"/\\|?*]', "-", item.get("title"))
+                        final_path = f"/data/{folder_name}"
+                        
+                        # Check common extensions
+                        extensions = ["mp4", "webm", "mkv", "mp3", "m4a", "opus"]
+                        file_exists = False
+                        for ext in extensions:
+                            file_path = os.path.join(final_path, f"{item_title}.{ext}")
+                            if os.path.exists(file_path):
+                                file_exists = True
+                                break
+                        
+                        if not file_exists:
+                            logging.info(f"File for item {item_id} doesn't exist, will retry download")
+                    
                     # Only retry if the item is not already in progress or pending
-                    if current_status not in ["In Progress", "Downloading", "Pending"]:
+                    # Or if the file doesn't exist even though it's marked as complete
+                    if current_status not in ("In Progress", "Downloading", "Pending") and (current_status != "Complete" or not file_exists):
                         logging.info(f"Retrying download for item {item_id}: {item['title']}")
                         
                         # Reset the item's status and progress
