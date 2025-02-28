@@ -30,6 +30,7 @@ function renderRow(data) {
     tr.querySelector('.row-select').setAttribute('data-id', data.id);
     tr.querySelector('.id').textContent = data.id;
     tr.querySelector('.title').textContent = data.title;
+    tr.querySelector('.url').textContent = data.url;
     tr.querySelector('.status').textContent = data.status;
     tr.querySelector('.download-progress').textContent = data.progress;
     tableBody.appendChild(tr);
@@ -48,6 +49,7 @@ socket.on('update_download_item', (update) => {
     if (row) {
         row.querySelector('.status').textContent = item.status;
         row.querySelector('.download-progress').textContent = item.progress;
+        row.querySelector('.url').textContent = item.url;
     }
 });
 
